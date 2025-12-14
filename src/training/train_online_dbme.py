@@ -73,6 +73,7 @@ class DeepBrainTrainer:
         # Losses
         self.criterion_lm = nn.CrossEntropyLoss()
         self.criterion_mse = nn.MSELoss()
+        self.criterion_router = nn.CrossEntropyLoss()
 
         # HE Decoder for auxiliary reconstruction loss
         self.he_decoder = nn.Sequential(
@@ -84,7 +85,25 @@ class DeepBrainTrainer:
             lr=config.get('he_lr', 3e-4), # Use same LR as HE
             weight_decay=0.01
         )
+
+        # TODO: Remove this temporary diagnostic tool before production.
+        # HE direct loss projection
+        self.projection_target = nn.Linear(self.he.input_dim, self.he.slot_dim).to(self.device)
+        self.optimizer_projection_target = optim.AdamW(
+            self.projection_target.parameters(),
+            lr=config.get('he_lr', 3e-4), # Use same LR as HE
+            weight_decay=0.01
+        )
         
+        # [DEBUG] Print gradient info
+        self.print_grad_info(self.he, "HE")
+        self.print_grad_info(self.router, "Router")
+
+    def print_grad_info(self, model, name):
+        print(f"--- Grad info for {name} ---")
+        for n, p in model.named_parameters():
+            print(n, p.requires_grad, p.numel())
+
     def train_online(self, sessions_loader: DataLoader, num_epochs: int = 1):
         """
         Main online training loop.
@@ -169,27 +188,45 @@ class DeepBrainTrainer:
                         # Process the last token's embedding as the utterance representation
                         utterance_embedding = ctx_emb[:, -1, :]
                         key, slot, _ = self.he.write(utterance_embedding)
-                        self.es.add(key.unsqueeze(0).detach(), slot.unsqueeze(0).detach())
+                        # Temporarily remove .detach() for debugging gradient flow
+                        self.es.add(key.unsqueeze(0), slot.unsqueeze(0))
                     elif insertion_mode == "per-token":
                         # Process each token's embedding
                         for i in range(ctx_emb.shape[1]):
                             token_embedding = ctx_emb[:, i, :]
                             key, slot, _ = self.he.write(token_embedding)
-                            self.es.add(key.unsqueeze(0).detach(), slot.unsqueeze(0).detach())
+                            # Temporarily remove .detach() for debugging gradient flow
+                            self.es.add(key.unsqueeze(0), slot.unsqueeze(0))
 
                     # SAFER APPROACH: Use slot in a differentiable path, then save a detached copy.
                     # Add auxiliary reconstruction loss for HE
                     # Note: This part needs to be adapted based on which embedding is used for reconstruction
                     if insertion_mode == "per-utterance":
                         recon_emb = self.he_decoder(slot)
-                        loss_he_recon = self.criterion_mse(recon_emb, utterance_embedding.detach())
+                        
+                        # [DEBUG] Add shape assertions and debug prints
+                        pred = recon_emb.unsqueeze(0)
+                        target = utterance_embedding.detach()
+                        print(f"[DEBUG] HE Recon Loss (per-utterance): pred.shape={tuple(pred.shape)}, target.shape={tuple(target.shape)}")
+                        assert pred.shape == target.shape, \
+                            f"Shape mismatch: pred {pred.shape} vs target {target.shape} - fix broadcasting"
+                        
+                        loss_he_recon = self.criterion_mse(pred, target)
                     else: # per-token
                         # In per-token, this loss would be calculated for each token, which can be complex.
                         # For simplicity, we can calculate it on the last token's slot.
                         last_token_embedding = ctx_emb[:, -1, :]
                         _, last_slot, _ = self.he.write(last_token_embedding)
                         recon_emb = self.he_decoder(last_slot)
-                        loss_he_recon = self.criterion_mse(recon_emb, last_token_embedding.detach())
+
+                        # [DEBUG] Add shape assertions and debug prints
+                        pred = recon_emb.unsqueeze(0)
+                        target = last_token_embedding.detach()
+                        print(f"[DEBUG] HE Recon Loss (per-token): pred.shape={tuple(pred.shape)}, target.shape={tuple(target.shape)}")
+                        assert pred.shape == target.shape, \
+                            f"Shape mismatch: pred {pred.shape} vs target {target.shape} - fix broadcasting"
+
+                        loss_he_recon = self.criterion_mse(pred, target)
                     
                     # Step 3: Retrieval & Fusion
                     if insertion_mode == "per-utterance":
@@ -268,6 +305,24 @@ class DeepBrainTrainer:
                     shift_logits_soft = logits_fused_soft[..., :-1, :].contiguous()
                     loss_lm = self.criterion_lm(shift_logits_soft.view(-1, shift_logits_soft.size(-1)), shift_labels.view(-1))
 
+                    # --- Oracle Label Generation ---
+                    with torch.no_grad():
+                        # 1. ES-only loss
+                        logits_es, _ = self.lm(utterance, memory_context=es_agg)
+                        shift_logits_es = logits_es[..., :-1, :].contiguous()
+                        loss_es = self.criterion_lm(shift_logits_es.view(-1, shift_logits_es.size(-1)), shift_labels.view(-1))
+
+                        # 2. KStore-only loss
+                        logits_ks, _ = self.lm(utterance, memory_context=k_agg)
+                        shift_logits_ks = logits_ks[..., :-1, :].contiguous()
+                        loss_ks = self.criterion_lm(shift_logits_ks.view(-1, shift_logits_ks.size(-1)), shift_labels.view(-1))
+                    
+                    oracle_label = torch.tensor([0 if loss_es < loss_ks else 1], device=self.device)
+
+
+                    # B. Router Loss (Supervised)
+                    loss_router = self.criterion_router(route_probs, oracle_label)
+                    lambda_router = 0.1 # As per user instructions
 
                     # C. Distillation Loss (KStore)
                     # "MSE/contrastive loss between slot vectors and KStore outputs"
@@ -281,20 +336,33 @@ class DeepBrainTrainer:
                     
                     # MSE Loss
                     # This ensures HE receives gradients.
-                    loss_distill = self.criterion_mse(slot.unsqueeze(0), k_target)
+                    pred = slot.unsqueeze(0)
+                    target = k_target
+                    print(f"[DEBUG] Distillation Loss: pred.shape={tuple(pred.shape)}, target.shape={tuple(target.shape)}")
+                    assert pred.shape == target.shape, \
+                        f"Shape mismatch: pred {pred.shape} vs target {target.shape} - fix broadcasting"
+                    
+                    loss_distill = self.criterion_mse(pred, target)
                     
                     # Weighting: 0.1 or similar? Prompt doesn't specify magnitude.
                     # Let's keep it 1.0 or small.
                     loss_distill = 0.1 * loss_distill
                     
                     # Total Loss
-                    loss = loss_lm + loss_distill + loss_he_recon
+                    # Temporary direct diagnostic loss for HE
+                    he_pred = slot
+                    he_target = self.projection_target(utterance_embedding.detach())
+                    loss_he_direct = self.criterion_mse(he_pred, he_target)
+                    lambda_he = 0.1
+                    
+                    loss = loss_lm + loss_distill + loss_he_recon + (lambda_he * loss_he_direct) + (lambda_router * loss_router)
                     
                     # Backprop
                     self.optimizer_lm.zero_grad()
                     self.optimizer_he.zero_grad()
                     self.optimizer_router.zero_grad()
                     self.optimizer_he_decoder.zero_grad()
+                    self.optimizer_projection_target.zero_grad()
                     
                     loss.backward()
                     
@@ -302,6 +370,7 @@ class DeepBrainTrainer:
                     self.optimizer_he.step()
                     self.optimizer_router.step() 
                     self.optimizer_he_decoder.step()
+                    self.optimizer_projection_target.step()
                     
                     session_loss += loss.item()
                     step += 1
