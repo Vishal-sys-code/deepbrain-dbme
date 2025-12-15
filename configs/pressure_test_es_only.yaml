@@ -1,0 +1,44 @@
+trial_id: "pressure_test_es_only_001"
+seed: 42
+output_dir: "demos/models/pressure_test"
+
+model:
+  name: "gpt2"
+  max_length: 512
+  language_model:
+    input_dim: 768
+    hidden_dim: 768
+  hippocampal_encoder:
+    input_dim: 768
+    slot_dim: 256
+    key_dim: 128
+  router:
+    input_dim: 768
+    mode: "always_es" # Force router to always use ES
+  consolidation:
+    mode: "prototype"
+    frequency: 1000000 # Effectively disable consolidation
+
+storage:
+  episodic_store:
+    capacity: 64 # Aggressively capped ES
+    eviction_policy: "fifo"
+  k_store: {}
+
+training:
+  batch_size: 1
+  learning_rate: 2e-5
+  epochs: 1
+  device: "cuda"
+
+metrics:
+  - "retention_at_k"
+  - "perplexity"
+  - "hallucination_rate"
+  - "memory_bytes"
+  - "avg_latency_ms"
+
+faiss:
+  dimension: 128
+  index_type: "Flat"
+  metric: "inner_product"
