@@ -16,10 +16,11 @@ from src.storage.k_store import KStore
 class DummyDBME(nn.Module):
     def __init__(self):
         super().__init__()
-        self.episodic_store = EpisodicStore(key_dim=128, slot_dim=128, capacity=100)
-        self.k_store = KStore(key_dim=128, value_dim=128, capacity=20)
+        # Dimensions must match the config used to generate the real data
+        self.episodic_store = EpisodicStore(key_dim=128, slot_dim=256, capacity=1000)
+        self.k_store = KStore(key_dim=128, value_dim=256, capacity=200)
         # A dummy encoder to simulate turning text into a vector
-        self.encoder = nn.Linear(1, 128) # Simplistic placeholder
+        self.encoder = nn.Linear(1, 128) # Encodes to key dimension
 
     def encode_query(self, query_text):
         # In a real model, this would involve tokenization and a transformer encoder.
@@ -45,7 +46,22 @@ def inspect_retrieval(model_path, query_text, top_k=5):
     print(f"Loading model from {model_path}...")
     model = DummyDBME()
     if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path))
+        # The state dict is inside the saved state, not the whole file
+        state = torch.load(model_path, weights_only=False)
+        # We are not loading a state_dict here, but rather populating the stores
+        es_contents = state.get('es_contents', {})
+        if es_contents:
+            for i in range(len(es_contents['keys'])):
+                model.episodic_store.add(es_contents['keys'][i], es_contents['slots'][i], es_contents['meta'][i])
+        
+        ks_contents = state.get('kstore_contents', {})
+        if ks_contents:
+             if ks_contents['keys'].size > 0:
+                keys_tensor = torch.from_numpy(ks_contents['keys'])
+                values_tensor = torch.from_numpy(ks_contents['values'])
+                for i in range(keys_tensor.size(0)):
+                    # Add batch dimension as expected by the add method
+                    model.k_store.add(keys_tensor[i].unsqueeze(0), values_tensor[i].unsqueeze(0), ks_contents['metadata'][i])
     model.eval()
 
     print(f"Encoding query: '{query_text}'")

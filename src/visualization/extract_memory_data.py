@@ -26,37 +26,47 @@ class DummyDBME(nn.Module):
 
 def extract_and_save_memory_data(model_path, output_path):
     """
-    Loads a trained model, extracts data from its memory stores, and saves it to a file.
+    Loads a model state from a .pt file, extracts data from its memory stores, 
+    and saves it to a pickle file.
     
     Args:
-        model_path (str): Path to the saved model checkpoint.
-        output_path (str): Path to save the extracted memory data.
+        model_path (str): Path to the saved model state file (.pt).
+        output_path (str): Path to save the extracted memory data (.pkl).
     """
-    print(f"Loading model from {model_path}...")
-    model = DummyDBME()
-    # In a real scenario, you would load a state dict. For this demo, we'll use a freshly initialized model.
-    # If a model file exists, load it. Otherwise, the dummy model will be used as is.
-    if os.path.exists(model_path):
-        model.load_state_dict(torch.load(model_path))
-    model.eval()
+    print(f"Loading model state from {model_path}...")
+    if not os.path.exists(model_path):
+        print(f"Error: Model state file not found at {model_path}")
+        sys.exit(1)
+        
+    state = torch.load(model_path, weights_only=False)
     
-    episodic_store = model.episodic_store
-    k_store = model.k_store
+    # Extract memory store contents
+    es_contents = state.get('es_contents', {})
+    ks_contents = state.get('kstore_contents', {})
+
+    # --- Add Assertions ---
+    assert es_contents and es_contents.get('keys'), "Episodic Store is empty or has no keys. Halting execution."
+    assert ks_contents and ks_contents.get('keys') is not None, "K-Store is empty or malformed. Halting execution."
+    # We can be more lenient with K-Store, as it might be empty if consolidation hasn't run
+    if ks_contents['keys'].size == 0:
+        print("Warning: K-Store is empty. Visualization may be limited.")
+    else:
+        assert ks_contents['values'].size > 0, "K-Store has keys but no values. Halting."
     
-    print("Extracting data from memory stores...")
+    print("Assertions passed: Memory stores are not empty.")
     
-    # EpisodicStore.store is a property that returns a list of dicts. We need to convert it.
-    es_items = episodic_store.store
+    # Convert tensors to numpy arrays for pickle serialization
     es_data = {
-        'slots': np.array([item['slot'] for item in es_items]) if es_items else np.array([]),
-        'keys': np.array([item['key'] for item in es_items]) if es_items else np.array([]),
-        'metadata': [item['meta'] for item in es_items] if es_items else [],
+        'slots': torch.stack(es_contents['slots']).cpu().numpy() if es_contents.get('slots') else np.array([]),
+        'keys': torch.stack(es_contents['keys']).cpu().numpy() if es_contents.get('keys') else np.array([]),
+        'metadata': es_contents.get('meta', []),
     }
-    
-    ks_data = k_store.export_all_data()
-    # Ensure keys in ks_data are consistent, e.g., 'slots' instead of 'values'
-    if 'values' in ks_data:
-        ks_data['slots'] = ks_data.pop('values')
+
+    ks_data = {
+        'slots': ks_contents['values'], # The export format uses 'values'
+        'keys': ks_contents['keys'],
+        'metadata': ks_contents.get('metadata', []),
+    }
 
     memory_data = {
         'episodic_store': es_data,

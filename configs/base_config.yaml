@@ -1,25 +1,36 @@
-trial_id: "demo_001"
+trial_id: "real_data_run_001"
 seed: 42
-config_name: "base_gpt2"
+output_dir: "demos/models"
 
-# Model hyperparameters
 model:
   name: "gpt2"
   max_length: 512
-  input_dim: 768
-  hidden_dim: 768
-  slot_dim: 256
-  key_dim: 128
-  vocab_size: 50257 # gpt2
+  language_model:
+    input_dim: 768
+    hidden_dim: 768
+  hippocampal_encoder:
+    input_dim: 768
+    slot_dim: 256
+    key_dim: 128
+  router:
+    input_dim: 768
+    mode: "learned"
+  consolidation:
+    mode: "prototype"
+    frequency: 10 # Consolidate every 10 sessions
 
-# Training settings
+storage:
+  episodic_store:
+    capacity: 10000
+    eviction_policy: "fifo"
+  k_store: {}
+
 training:
-  batch_size: 32
+  batch_size: 1
   learning_rate: 2e-5
-  epochs: 3
+  epochs: 1
   device: "cuda"
 
-# Metrics schema to track
 metrics:
   - "retention_at_k"
   - "perplexity"
@@ -27,8 +38,7 @@ metrics:
   - "memory_bytes"
   - "avg_latency_ms"
 
-# FAISS settings
 faiss:
-  dimension: 768
+  dimension: 128
   index_type: "Flat"
   metric: "inner_product"
