@@ -40,7 +40,9 @@ class MemoryWriter:
             embedding = embedding.to(self.device).unsqueeze(0)
             
             with torch.no_grad():
-                key, slot, _ = self.he.write(embedding)
+                he_output = self.he.write(embedding)
+                key = he_output["key"]
+                slot = he_output["slot"]
             
             # Add to episodic store, detaching from the computation graph
             self.es.add(key.detach(), slot.detach(), meta=metadata)
