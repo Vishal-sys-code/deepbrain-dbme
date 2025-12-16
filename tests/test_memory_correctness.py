@@ -25,9 +25,9 @@ def test_memory_correctness():
     base_model = AutoModelForCausalLM.from_pretrained(config['model']['name'])
 
     model_config = config['model']
-    lm = LanguageModelWithAdapter(base_model, input_dim=model_config['input_dim'], hidden_dim=model_config['hidden_dim'], slot_dim=model_config['slot_dim'])
-    he = HippocampalEncoder(input_dim=model_config['input_dim'], slot_dim=model_config['slot_dim'], key_dim=model_config['key_dim'])
-    es = EpisodicStore(slot_dim=model_config['slot_dim'], key_dim=model_config['key_dim'], capacity=100)
+    lm = LanguageModelWithAdapter(base_model, input_dim=model_config['language_model']['input_dim'], hidden_dim=model_config['language_model']['hidden_dim'], slot_dim=model_config['hippocampal_encoder']['slot_dim'])
+    he = HippocampalEncoder(input_dim=model_config['hippocampal_encoder']['input_dim'], slot_dim=model_config['hippocampal_encoder']['slot_dim'], key_dim=model_config['hippocampal_encoder']['key_dim'])
+    es = EpisodicStore(slot_dim=model_config['hippocampal_encoder']['slot_dim'], key_dim=model_config['hippocampal_encoder']['key_dim'], capacity=100)
 
     facts = [f"Fact number {i}" for i in range(10)]
     fact_embeddings = []
@@ -37,13 +37,14 @@ def test_memory_correctness():
         with torch.no_grad():
             _, embedding = lm(inputs.input_ids)
             fact_embeddings.append(embedding.mean(dim=1))
-            key, slot, _ = he.write(embedding.mean(dim=1))
+            write_output = he.write(embedding.mean(dim=1))
+            key, slot = write_output['key'], write_output['slot']
             es.add(key.detach(), slot.detach())
 
         query_inputs = tokenizer(fact, return_tensors='pt', padding=True, truncation=True)
         with torch.no_grad():
             _, query_embedding = lm(query_inputs.input_ids)
-            query_key, _, _ = he.write(query_embedding.mean(dim=1))
+            query_key = he.write(query_embedding.mean(dim=1))['key']
             retrieval_results = es.retrieve(query_key, k=1)
             retrieved_slots = retrieval_results["slots"]
 
