@@ -61,8 +61,7 @@ class RetentionEvaluator:
             if self.model_type == 'kv_cache':
                 storage.add(embedding.unsqueeze(0), embedding.unsqueeze(0), meta={'fact_id': fact['fact_id']})
             else:
-                write_output = self.models['he'].write(embedding.unsqueeze(0))
-                key, slot = write_output['key'], write_output['slot']
+                key, slot, _ = self.models['he'].write(embedding.unsqueeze(0))
                 storage.add(key.detach(), slot.detach(), meta={'fact_id': fact['fact_id']})
         print("Fact injection complete.")
 
@@ -90,8 +89,7 @@ class RetentionEvaluator:
                         if self.model_type == 'kv_cache':
                             storage.add(embedding, embedding)
                         else:
-                            write_output = self.models['he'].write(embedding)
-                            key, slot = write_output['key'], write_output['slot']
+                            key, slot, _ = self.models['he'].write(embedding)
                             storage.add(key.detach(), slot.detach())
                     
                     steps_processed += 1
@@ -116,7 +114,7 @@ class RetentionEvaluator:
                 if self.model_type == 'kv_cache':
                     query_key = query_embedding.unsqueeze(0)
                 else:
-                    query_key = self.models['he'].write(query_embedding.unsqueeze(0))['key']
+                    query_key, _, _ = self.models['he'].write(query_embedding.unsqueeze(0))
                 
                 max_k = max(k_values)
                 retrieval_results = storage.retrieve(query_key, k=max_k)

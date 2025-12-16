@@ -54,6 +54,7 @@ evaluation:
                 self.output_dir = "evaluation_results"
                 self.model_types = ['dbme']
                 self.num_seeds = 1
+
         main(DummyArgs())
     finally:
         # Clean up the dummy config file

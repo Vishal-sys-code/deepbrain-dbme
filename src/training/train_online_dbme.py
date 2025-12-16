@@ -5,6 +5,7 @@ import os
 
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -195,16 +196,14 @@ class DeepBrainTrainer:
                     if insertion_mode == "per-utterance":
                         # Process the last token's embedding as the utterance representation
                         utterance_embedding = ctx_emb[:, -1, :]
-                        write_output = self.he.write(utterance_embedding)
-                        key, slot = write_output["key"], write_output["slot"]
+                        key, slot, _ = self.he.write(utterance_embedding)
                         # Temporarily remove .detach() for debugging gradient flow
                         self.es.add(key, slot)
                     elif insertion_mode == "per-token":
                         # Process each token's embedding
                         for i in range(ctx_emb.shape[1]):
                             token_embedding = ctx_emb[:, i, :]
-                            write_output = self.he.write(token_embedding)
-                            key, slot = write_output["key"], write_output["slot"]
+                            key, slot, _ = self.he.write(token_embedding)
                             # Temporarily remove .detach() for debugging gradient flow
                             self.es.add(key, slot)
 
@@ -241,7 +240,7 @@ class DeepBrainTrainer:
                     # Step 3: Retrieval & Fusion
                     if insertion_mode == "per-utterance":
                         query_embedding = ctx_emb[:, -1, :]
-                        key = self.he.write(query_embedding)["key"]
+                        key, _, _ = self.he.write(query_embedding)
                         route_choice, route_probs = self.router.route(query_embedding)
                         
                         retrieval_k = self.config.get("model", {}).get("retrieval_k", 5)
@@ -453,8 +452,7 @@ def evaluate_retrieval(trainer, num_facts=100, num_queries=100):
             fact = torch.randint(0, 1000, (10,))
             logits_pre, ctx_emb = trainer.lm(fact.unsqueeze(0).to(trainer.device))
             utterance_embedding = ctx_emb[:, -1, :]
-            write_output = trainer.he.write(utterance_embedding)
-            key, slot = write_output['key'], write_output['slot']
+            key, slot, _ = trainer.he.write(utterance_embedding)
             trainer.es.add(key, slot)
             fact_embeddings.append(utterance_embedding)
             fact_slots.append(slot)
@@ -464,7 +462,7 @@ def evaluate_retrieval(trainer, num_facts=100, num_queries=100):
         recall_at_10 = 0
         for i in range(num_queries):
             query_embedding = fact_embeddings[i]
-            key = trainer.he.write(query_embedding)['key']
+            key, _, _ = trainer.he.write(query_embedding)
             results = trainer.es.retrieve(key, k=10)
             
             retrieved_slots = results["slots"].squeeze(0)
