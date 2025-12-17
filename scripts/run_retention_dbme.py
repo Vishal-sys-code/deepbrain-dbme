@@ -3,6 +3,7 @@ import json
 import os
 import yaml
 import sys
+import numpy as np
 from tqdm import tqdm
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
