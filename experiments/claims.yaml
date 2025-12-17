@@ -1,0 +1,17 @@
+C1:
+  metric: Recall@1, Recall@5
+  aggregate: AURC  # Area Under Retention Curve
+  condition: fixed_memory_bytes
+  target_gain: "15-20% higher AURC"
+  p_value_threshold: 0.05
+
+C2:
+  metric: QA_accuracy
+  dataset: LAMA-style
+  condition: before_vs_after_consolidation
+  target_gain: "5-10% absolute increase"
+
+C3:
+  metric: stale_fact_persistence_rate
+  condition: forgetting_on_vs_off
+  target_reduction: "30-50%"
